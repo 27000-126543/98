@@ -49,6 +49,7 @@ export default function HistoryPage() {
   const tasks = useStore(s => s.tasks)
   const deleteTask = useStore(s => s.deleteTask)
   const deleteTasks = useStore(s => s.deleteTasks)
+  const loadDemoTasks = useStore(s => s.loadDemoTasks)
 
   const [filter, setFilter] = useState<FilterKey>('all')
   const [sort, setSort] = useState<SortKey>('time')
@@ -95,6 +96,14 @@ export default function HistoryPage() {
         <Inbox size={56} strokeWidth={1} />
         <p className="mt-4 text-lg">暂无计算任务</p>
         <p className="mt-1 text-sm text-white/20">上传分子文件开始计算</p>
+        <div className="mt-6 flex gap-3">
+          <button
+            onClick={loadDemoTasks}
+            className="px-5 py-2.5 rounded-xl bg-[#00F0FF]/15 border border-[#00F0FF]/30 text-[#00F0FF] text-sm font-medium hover:bg-[#00F0FF]/25 transition-colors"
+          >
+            加载示例数据
+          </button>
+        </div>
       </div>
     )
   }

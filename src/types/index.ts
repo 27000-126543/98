@@ -12,6 +12,7 @@ export interface MoleculeParseResult {
   molecularWeight: number
   containsHeavyMetal: boolean
   precisionMode: 'standard' | 'high'
+  error?: string
 }
 
 export interface CalculationProgress {

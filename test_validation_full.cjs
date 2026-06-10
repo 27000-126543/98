@@ -1,0 +1,267 @@
+const ATOM_MASSES = {
+  H: 1.008, He: 4.003, Li: 6.941, Be: 9.012, B: 10.81, C: 12.011, N: 14.007, O: 15.999,
+  F: 18.998, Ne: 20.18, Na: 22.99, Mg: 24.305, Al: 26.982, Si: 28.086, P: 30.974, S: 32.065,
+  Cl: 35.453, Ar: 39.948, K: 39.098, Ca: 40.078, Fe: 55.845, Cu: 63.546, Zn: 65.38,
+  Br: 79.904, Ag: 107.868, I: 126.904, Au: 196.967, Pt: 195.084, Pd: 106.42,
+  Hg: 200.59, Pb: 207.2, Cd: 112.411, Cr: 51.996, Ni: 58.693, Co: 58.933, Mn: 54.938,
+};
+const HEAVY_METALS = ['Fe', 'Cu', 'Zn', 'Ag', 'Au', 'Pt', 'Pd', 'Hg', 'Pb', 'Cd', 'Cr', 'Ni', 'Co', 'Mn'];
+const ATOM_NAMES = {
+  H: '氢', He: '氦', Li: '锂', Be: '铍', B: '硼', C: '碳', N: '氮', O: '氧',
+  F: '氟', Ne: '氖', Na: '钠', Mg: '镁', Al: '铝', Si: '硅', P: '磷', S: '硫',
+  Cl: '氯', Ar: '氩', K: '钾', Ca: '钙', Fe: '铁', Cu: '铜', Zn: '锌',
+  Br: '溴', Ag: '银', I: '碘', Au: '金', Pt: '铂', Pd: '钯',
+  Hg: '汞', Pb: '铅', Cd: '镉', Cr: '铬', Ni: '镍', Co: '钴', Mn: '锰',
+};
+
+function validateAtomSymbol(s) {
+  if (!s) return false;
+  if (!/^[A-Za-z]+$/.test(s)) return false;
+  const p = s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  return p in ATOM_MASSES;
+}
+
+function parseMoleculeFile(content, fileName) {
+  const atoms = [];
+  const atomCounts = {};
+  const ext = fileName.split('.').pop()?.toLowerCase();
+  const trimmed = content.replace(/\r/g, '').trim();
+  if (!trimmed) {
+    return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: '文件为空或内容为空' };
+  }
+  const lines = trimmed.split('\n').map(l => l.trimEnd());
+
+  if (ext === 'mol' || ext === 'sdf') {
+    if (lines.length < 4) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: 'MOL/SDF 文件格式错误：文件行数不足' };
+    }
+    const countsLine = lines[3].trim();
+    if (!/^\d+\s+\d+.*$/.test(countsLine)) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: 'MOL/SDF 文件格式错误：计数行格式不正确' };
+    }
+    const countMatch = countsLine.match(/^(\d+)\s+(\d+)/);
+    if (!countMatch) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: 'MOL/SDF 文件格式错误：无法解析计数行' };
+    }
+    const atomCount = parseInt(countMatch[1], 10);
+    if (isNaN(atomCount) || atomCount <= 0) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: 'MOL/SDF 文件格式错误：原子数无效' };
+    }
+
+    let atomLineCount = 0;
+    for (let i = 4; i < lines.length; i++) {
+      const parts = lines[i].trim().split(/\s+/);
+      if (parts.length < 4) break;
+      const x = parseFloat(parts[0]);
+      const y = parseFloat(parts[1]);
+      const z = parseFloat(parts[2]);
+      const sym = parts[3];
+      if (isNaN(x) || isNaN(y) || isNaN(z) || !validateAtomSymbol(sym)) break;
+      atomLineCount++;
+    }
+
+    if (atomLineCount !== atomCount) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `MOL/SDF 文件格式错误：计数行声明 ${atomCount} 个原子但实际有 ${atomLineCount} 行有效原子坐标，数量必须完全一致` };
+    }
+
+    for (let i = 4; i < 4 + atomCount; i++) {
+      const parts = lines[i].trim().split(/\s+/);
+      if (parts.length < 4) {
+        return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `MOL/SDF 文件格式错误：第 ${i + 1} 行原子数据格式不正确` };
+      }
+      const x = parseFloat(parts[0]);
+      const y = parseFloat(parts[1]);
+      const z = parseFloat(parts[2]);
+      const symbol = parts[3];
+      if (isNaN(x) || isNaN(y) || isNaN(z)) {
+        return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `MOL/SDF 文件格式错误：第 ${i + 1} 行坐标无效` };
+      }
+      if (!validateAtomSymbol(symbol)) {
+        return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `MOL/SDF 文件格式错误：第 ${i + 1} 行原子符号 "${symbol}" 无效` };
+      }
+      const proper = symbol.charAt(0).toUpperCase() + symbol.slice(1).toLowerCase();
+      atomCounts[proper] = (atomCounts[proper] || 0) + 1;
+    }
+  } else if (ext === 'xyz') {
+    if (lines.length < 2) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: 'XYZ 文件格式错误：文件行数不足' };
+    }
+    const atomCount = parseInt(lines[0].trim(), 10);
+    if (isNaN(atomCount) || atomCount <= 0) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: 'XYZ 文件格式错误：首行原子数无效' };
+    }
+    const nonEmptyAfterTitle = lines.slice(2).filter(l => l.trim().length > 0);
+    if (nonEmptyAfterTitle.length !== atomCount) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `XYZ 文件格式错误：声明 ${atomCount} 个原子但实际有 ${nonEmptyAfterTitle.length} 行原子数据，数量必须完全一致` };
+    }
+    for (let i = 2; i < 2 + atomCount && i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
+      const parts = line.split(/\s+/);
+      if (parts.length < 4) {
+        return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `XYZ 文件格式错误：第 ${i + 1} 行原子数据格式不正确` };
+      }
+      const symbol = parts[0];
+      const x = parseFloat(parts[1]);
+      const y = parseFloat(parts[2]);
+      const z = parseFloat(parts[3]);
+      if (isNaN(x) || isNaN(y) || isNaN(z)) {
+        return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `XYZ 文件格式错误：第 ${i + 1} 行坐标无效` };
+      }
+      if (!validateAtomSymbol(symbol)) {
+        return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `XYZ 文件格式错误：第 ${i + 1} 行原子符号 "${symbol}" 无效` };
+      }
+      const proper = symbol.charAt(0).toUpperCase() + symbol.slice(1).toLowerCase();
+      atomCounts[proper] = (atomCounts[proper] || 0) + 1;
+    }
+  } else if (ext === 'pdb') {
+    const atomLines = lines.filter(l => l.startsWith('ATOM') || l.startsWith('HETATM'));
+    if (atomLines.length === 0) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: 'PDB 文件格式错误：未找到有效 ATOM/HETATM 记录' };
+    }
+    for (const line of atomLines) {
+      let symbol = '';
+      if (line.length >= 78) {
+        symbol = line.substring(76, 78).trim();
+      }
+      if (!symbol && line.length >= 16) {
+        symbol = line.substring(12, 16).trim().replace(/[0-9]/g, '');
+      }
+      if (!validateAtomSymbol(symbol)) continue;
+      const proper = symbol.charAt(0).toUpperCase() + symbol.slice(1).toLowerCase();
+      atomCounts[proper] = (atomCounts[proper] || 0) + 1;
+    }
+    if (Object.keys(atomCounts).length === 0) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: 'PDB 文件格式错误：未识别到有效原子符号' };
+    }
+  } else {
+    return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: '不支持的文件格式' };
+  }
+
+  if (Object.keys(atomCounts).length === 0) {
+    return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: '未识别到有效原子' };
+  }
+
+  let molecularWeight = 0;
+  let containsHeavyMetal = false;
+  for (const [symbol, count] of Object.entries(atomCounts)) {
+    const mass = ATOM_MASSES[symbol] || 12;
+    const isHeavy = HEAVY_METALS.includes(symbol);
+    if (isHeavy) containsHeavyMetal = true;
+    molecularWeight += mass * count;
+    atoms.push({ symbol, name: ATOM_NAMES[symbol] || symbol, count, mass: Math.round(mass * count * 1000) / 1000, isHeavyMetal: isHeavy });
+  }
+  atoms.sort((a, b) => {
+    const order = ['C', 'H', 'O', 'N', 'S', 'P'];
+    const ia = order.indexOf(a.symbol), ib = order.indexOf(b.symbol);
+    if (ia !== -1 && ib !== -1) return ia - ib;
+    if (ia !== -1) return -1;
+    if (ib !== -1) return 1;
+    return a.symbol.localeCompare(b.symbol);
+  });
+  const formulaParts = atoms.map(a => a.symbol + (a.count > 1 ? a.count : ''));
+  return {
+    formula: formulaParts.join(''),
+    atoms,
+    molecularWeight: Math.round(molecularWeight * 1000) / 1000,
+    containsHeavyMetal,
+    precisionMode: molecularWeight > 500 || containsHeavyMetal ? 'high' : 'standard',
+  };
+}
+
+let pass = 0, total = 0;
+
+function test(name, content, fname, expectSuccess, expectedFormula = null) {
+  total++;
+  const r = parseMoleculeFile(content, fname);
+  const ok = expectSuccess ? !r.error : !!r.error;
+  let formulaOk = true;
+  if (expectSuccess && expectedFormula && r.formula !== expectedFormula) formulaOk = false;
+  const allOk = ok && formulaOk;
+  if (allOk) pass++;
+  console.log(`${allOk ? '✅' : '❌'} ${name}`);
+  if (!allOk) {
+    console.log(`     预期: ${expectSuccess ? '成功' : '失败'}` + (expectedFormula ? `, formula=${expectedFormula}` : ''));
+    console.log(`     实际: ${r.error ? '失败 - ' + r.error : '成功 - formula=' + r.formula}`);
+  }
+  return allOk;
+}
+
+console.log('========== 格式校验完整测试 ==========\n');
+
+// ========== XYZ 测试 ==========
+console.log('--- XYZ 格式 ---');
+test('[XYZ-正常] 水分子 3原子',
+  '3\nWater molecule\nO  0.0000  0.0000  0.0000\nH  0.7580  0.5870  0.0000\nH -0.7580  0.5870  0.0000\n',
+  'water.xyz', true, 'H2O');
+
+test('[XYZ-正常] 苯分子 12原子',
+  '12\nBenzene\nC  1.200  0.000  0.000\nC  0.600  1.039  0.000\nC -0.600  1.039  0.000\nC -1.200  0.000  0.000\nC -0.600 -1.039  0.000\nC  0.600 -1.039  0.000\nH  2.130  0.000  0.000\nH  1.065  1.845  0.000\nH -1.065  1.845  0.000\nH -2.130  0.000  0.000\nH -1.065 -1.845  0.000\nH  1.065 -1.845  0.000\n',
+  'benzene.xyz', true, 'C6H6');
+
+test('[XYZ-失败] 原子数多写（声明10实际3）',
+  '10\nwrong\nO 0 0 0\nH 1 0 0\nH 0 1 0\n',
+  'bad1.xyz', false);
+
+test('[XYZ-失败] 原子数少写（声明1实际2）',
+  '1\nwrong\nO 0 0 0\nH 1 0 0\n',
+  'bad2.xyz', false);
+
+test('[XYZ-失败] 乱写内容首行非数字',
+  '这是乱写的内容\n根本不是有效的xyz格式\n随便写几行\n看看能不能校验失败\n',
+  'bad3.xyz', false);
+
+test('[XYZ-失败] 空文件',
+  '',
+  'empty.xyz', false);
+
+test('[XYZ-失败] 缺少坐标值',
+  '2\nBad atom row\nO  0.0  0.0\nH  0.7\n',
+  'bad4.xyz', false);
+
+test('[XYZ-失败] 无效原子符号',
+  '3\nBad symbol\nXx 0 0 0\nYy 1 0 0\nZz 0 1 0\n',
+  'bad5.xyz', false);
+
+// ========== MOL/SDF 测试 ==========
+console.log('\n--- MOL/SDF 格式 ---');
+test('[MOL-正常] 水分子',
+  '  water\n  ABC001\n  00000\n  3  2  0  0  0  0  0  0  0  0999 V2000\n    0.0000    0.0000    0.0000 O   0  0  0  0  0  0\n    0.7580    0.5870    0.0000 H   0  0  0  0  0  0\n   -0.7580    0.5870    0.0000 H   0  0  0  0  0  0\n  1  2  1  0  0  0\n  1  3  1  0  0  0\nM  END\n',
+  'water.mol', true, 'OH2');
+
+test('[MOL-失败] 计数行声明2个原子但实际3行原子',
+  '  bad1\n  ABC001\n  00000\n  2  1  0  0  0  0  0  0  0  0999 V2000\n    0.0000    0.0000    0.0000 O   0  0  0  0  0  0\n    0.7580    0.5870    0.0000 H   0  0  0  0  0  0\n   -0.7580    0.5870    0.0000 H   0  0  0  0  0  0\n  1  2  1  0  0  0\nM  END\n',
+  'bad1.mol', false);
+
+test('[MOL-失败] 计数行声明3个原子但实际2行原子',
+  '  bad2\n  ABC001\n  00000\n  3  1  0  0  0  0  0  0  0  0999 V2000\n    0.0000    0.0000    0.0000 O   0  0  0  0  0  0\n    0.7580    0.5870    0.0000 H   0  0  0  0  0  0\n  1  2  1  0  0  0\nM  END\n',
+  'bad2.mol', false);
+
+test('[MOL-失败] 文件行数不足',
+  'only\n3\nlines\n',
+  'bad3.mol', false);
+
+test('[MOL-失败] 计数行格式错误',
+  '  bad4\n  ABC001\n  00000\n  XXX  YYY  0  0  0  0  0  0  0  0999 V2000\n    0.0000    0.0000    0.0000 O   0  0  0  0  0  0\n',
+  'bad4.mol', false);
+
+test('[MOL-失败] 无效原子符号',
+  '  bad5\n  ABC001\n  00000\n  1  0  0  0  0  0  0  0  0  0999 V2000\n    0.0000    0.0000    0.0000 Xx  0  0  0  0  0  0\nM  END\n',
+  'bad5.mol', false);
+
+// ========== PDB 测试 ==========
+console.log('\n--- PDB 格式 ---');
+test('[PDB-正常] 简单蛋白片段',
+  'HEADER    TEST\nTITLE     Test PDB\nATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N\nATOM      2  CA  ALA A   1       1.500   0.000   0.000  1.00  0.00           C\nATOM      3  C   ALA A   1       2.000   1.000   0.000  1.00  0.00           C\nATOM      4  O   ALA A   1       2.500   1.500   1.000  1.00  0.00           O\nEND\n',
+  'test.pdb', true, 'C3NO');
+
+test('[PDB-失败] 无ATOM/HETATM记录',
+  'HEADER    EMPTY\nTITLE     No atoms\nREMARK    Nothing here\nEND\n',
+  'bad.pdb', false);
+
+test('[PDB-正常] 含HETATM记录',
+  'HEADER    TEST\nHETATM    1  O   HOH A 100       0.000   0.000   0.000  1.00  0.00           O\nHETATM    2  H1  HOH A 100       0.957   0.000   0.000  1.00  0.00           H\nHETATM    3  H2  HOH A 100      -0.239   0.927   0.000  1.00  0.00           H\nEND\n',
+  'water.pdb', true, 'OH2');
+
+console.log(`\n========== 结果: ${pass}/${total} 通过 ==========`);
+process.exit(pass === total ? 0 : 1);

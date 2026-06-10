@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { Zap, ArrowLeftRight, Layers, CheckCircle, AlertCircle } from 'lucide-react'
+import { Zap, ArrowLeftRight, Layers, CheckCircle, AlertCircle, ArrowLeft } from 'lucide-react'
 import { useStore } from '@/store'
 import type { CalculationProgress } from '@/types'
 
@@ -16,57 +16,58 @@ export default function ComputePage() {
   const updateProgress = useStore(s => s.updateProgress)
   const completeTask = useStore(s => s.completeTask)
   const [completed, setCompleted] = useState(false)
-  const intervalRef = useRef<ReturnType<typeof setInterval>>(null)
-  const tickRef = useRef(0)
-  const progressRef = useRef<CalculationProgress>({ energy: 0, dipole: 0, homoLumo: 0 })
 
   useEffect(() => {
-    if (!task || task.status === 'completed') {
-      if (task?.status === 'completed') setCompleted(true)
+    if (!task) return
+    if (task.status === 'completed') {
+      setCompleted(true)
       return
     }
 
     const isHigh = task.precisionMode === 'high'
     const totalTicks = isHigh ? 50 : 30
-    const intervalMs = isHigh ? 100 : 100
+    const intervalMs = 100
 
-    intervalRef.current = setInterval(() => {
-      tickRef.current += 1
-      const t = tickRef.current / totalTicks
+    const initProgress = { ...task.progress }
+    const maxInit = Math.max(initProgress.energy, initProgress.dipole, initProgress.homoLumo)
+    let tick = Math.round((maxInit / 100) * totalTicks)
 
-      const energyTarget = Math.min(100, Math.round(t * 100 * (1 + Math.random() * 0.1)))
-      const dipoleTarget = Math.min(100, Math.round(t * 95 * (1 + Math.random() * 0.15)))
-      const homoLumoTarget = Math.min(100, Math.round(t * 90 * (1 + Math.random() * 0.2)))
+    const timer = setInterval(() => {
+      tick += 1
+      const t = tick / totalTicks
 
-      const p = progressRef.current
-      const next: CalculationProgress = {
-        energy: Math.max(p.energy, energyTarget),
-        dipole: Math.max(p.dipole, dipoleTarget),
-        homoLumo: Math.max(p.homoLumo, homoLumoTarget),
+      const speedFactors = {
+        energy: 1.0,
+        dipole: 0.95,
+        homoLumo: 0.9,
       }
-      progressRef.current = next
+
+      const next: CalculationProgress = {
+        energy: Math.min(100, Math.max(initProgress.energy, Math.round(t * 100 * speedFactors.energy * (1 + Math.random() * 0.1)))),
+        dipole: Math.min(100, Math.max(initProgress.dipole, Math.round(t * 100 * speedFactors.dipole * (1 + Math.random() * 0.15)))),
+        homoLumo: Math.min(100, Math.max(initProgress.homoLumo, Math.round(t * 100 * speedFactors.homoLumo * (1 + Math.random() * 0.2)))),
+      }
+
       updateProgress(task.id, next)
 
-      if (next.energy >= 100 && next.dipole >= 100 && next.homoLumo >= 100) {
-        if (intervalRef.current) clearInterval(intervalRef.current)
+      if (tick >= totalTicks) {
+        const forced: CalculationProgress = { energy: 100, dipole: 100, homoLumo: 100 }
+        updateProgress(task.id, forced)
+        clearInterval(timer)
         completeTask(task.id)
         setCompleted(true)
+        return
       }
 
-      if (tickRef.current >= totalTicks && !completed) {
-        const forced: CalculationProgress = { energy: 100, dipole: 100, homoLumo: 100 }
-        progressRef.current = forced
-        updateProgress(task.id, forced)
-        if (intervalRef.current) clearInterval(intervalRef.current)
+      if (next.energy >= 100 && next.dipole >= 100 && next.homoLumo >= 100) {
+        clearInterval(timer)
         completeTask(task.id)
         setCompleted(true)
       }
     }, intervalMs)
 
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current)
-    }
-  }, [task?.id, task?.status, task?.precisionMode])
+    return () => clearInterval(timer)
+  }, [id, updateProgress, completeTask])
 
   if (!task) {
     return (
@@ -74,9 +75,9 @@ export default function ComputePage() {
         <div className="text-center">
           <AlertCircle className="w-16 h-16 text-red-400 mx-auto mb-4" />
           <p className="text-red-400 text-xl font-semibold mb-2">任务未找到</p>
-          <p className="text-gray-500 text-sm">该计算任务不存在或已被删除</p>
-          <Link to="/" className="inline-block mt-6 text-[#00F0FF] hover:underline text-sm">
-            返回首页
+          <p className="text-gray-500 text-sm mb-6">该计算任务不存在或已被删除</p>
+          <Link to="/" className="inline-flex items-center gap-2 text-[#00F0FF] hover:underline text-sm">
+            <ArrowLeft className="w-4 h-4" /> 返回首页
           </Link>
         </div>
       </div>
@@ -91,6 +92,10 @@ export default function ComputePage() {
       </div>
 
       <div className="relative z-10 w-full max-w-4xl">
+        <Link to="/history" className="inline-flex items-center gap-2 text-gray-400 hover:text-white text-sm mb-6 transition-colors">
+          <ArrowLeft className="w-4 h-4" /> 返回历史任务
+        </Link>
+
         <div className="text-center mb-10">
           <h1 className="text-2xl font-bold text-white mb-2">分子性质计算</h1>
           <p className="text-gray-400 text-sm">

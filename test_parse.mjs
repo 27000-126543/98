@@ -1,17 +1,14 @@
-import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
-import type { CalculationTask, Notification, AtomInfo, MoleculeParseResult, CalculationResult } from '@/types'
-import { demoTasks } from '@/data/demoTasks'
-
-const HEAVY_METALS = ['Fe', 'Cu', 'Zn', 'Ag', 'Au', 'Pt', 'Pd', 'Hg', 'Pb', 'Cd', 'Cr', 'Ni', 'Co', 'Mn']
-const ATOM_MASSES: Record<string, number> = {
+const ATOM_MASSES = {
   H: 1.008, He: 4.003, Li: 6.941, Be: 9.012, B: 10.81, C: 12.011, N: 14.007, O: 15.999,
   F: 18.998, Ne: 20.18, Na: 22.99, Mg: 24.305, Al: 26.982, Si: 28.086, P: 30.974, S: 32.065,
   Cl: 35.453, Ar: 39.948, K: 39.098, Ca: 40.078, Fe: 55.845, Cu: 63.546, Zn: 65.38,
   Br: 79.904, Ag: 107.868, I: 126.904, Au: 196.967, Pt: 195.084, Pd: 106.42,
   Hg: 200.59, Pb: 207.2, Cd: 112.411, Cr: 51.996, Ni: 58.693, Co: 58.933, Mn: 54.938,
 }
-const ATOM_NAMES: Record<string, string> = {
+
+const HEAVY_METALS = ['Fe', 'Cu', 'Zn', 'Ag', 'Au', 'Pt', 'Pd', 'Hg', 'Pb', 'Cd', 'Cr', 'Ni', 'Ni', 'Co', 'Mn']
+
+const ATOM_NAMES = {
   H: '氢', He: '氦', Li: '锂', Be: '铍', B: '硼', C: '碳', N: '氮', O: '氧',
   F: '氟', Ne: '氖', Na: '钠', Mg: '镁', Al: '铝', Si: '硅', P: '磷', S: '硫',
   Cl: '氯', Ar: '氩', K: '钾', Ca: '钙', Fe: '铁', Cu: '铜', Zn: '锌',
@@ -19,13 +16,9 @@ const ATOM_NAMES: Record<string, string> = {
   Hg: '汞', Pb: '铅', Cd: '镉', Cr: '铬', Ni: '镍', Co: '钴', Mn: '锰',
 }
 
-function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8)
-}
-
-function parseMoleculeFile(content: string, fileName: string): MoleculeParseResult {
-  const atoms: AtomInfo[] = []
-  const atomCounts: Record<string, number> = {}
+function parseMoleculeFile(content, fileName) {
+  const atoms = []
+  const atomCounts = {}
   const ext = fileName.split('.').pop()?.toLowerCase()
 
   const trimmed = content.replace(/\r/g, '').trim()
@@ -43,7 +36,7 @@ function parseMoleculeFile(content: string, fileName: string): MoleculeParseResu
 
   const lines = trimmed.split('\n').map(l => l.trimEnd())
 
-  const validateAtomSymbol = (symbol: string): boolean => {
+  const validateAtomSymbol = (symbol) => {
     if (!symbol) return false
     if (!/^[A-Za-z]+$/.test(symbol)) return false
     const proper = symbol.charAt(0).toUpperCase() + symbol.slice(1).toLowerCase()
@@ -71,20 +64,8 @@ function parseMoleculeFile(content: string, fileName: string): MoleculeParseResu
       return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: 'MOL/SDF 文件格式错误：原子数无效' }
     }
 
-    let atomLineCount = 0
-    for (let i = 4; i < lines.length; i++) {
-      const parts = lines[i].trim().split(/\s+/)
-      if (parts.length < 4) break
-      const x = parseFloat(parts[0])
-      const y = parseFloat(parts[1])
-      const z = parseFloat(parts[2])
-      const sym = parts[3]
-      if (isNaN(x) || isNaN(y) || isNaN(z) || !validateAtomSymbol(sym)) break
-      atomLineCount++
-    }
-
-    if (atomLineCount !== atomCount) {
-      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `MOL/SDF 文件格式错误：计数行声明 ${atomCount} 个原子但实际有 ${atomLineCount} 行有效原子坐标，数量必须完全一致` }
+    if (lines.length < 4 + atomCount) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `MOL/SDF 文件格式错误：声明 ${atomCount} 个原子但实际只有 ${Math.max(0, lines.length - 4)} 行原子数据` }
     }
 
     for (let i = 4; i < 4 + atomCount; i++) {
@@ -119,8 +100,8 @@ function parseMoleculeFile(content: string, fileName: string): MoleculeParseResu
 
     const nonEmptyAfterTitle = lines.slice(2).filter(l => l.trim().length > 0)
 
-    if (nonEmptyAfterTitle.length !== atomCount) {
-      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `XYZ 文件格式错误：声明 ${atomCount} 个原子但实际有 ${nonEmptyAfterTitle.length} 行原子数据，数量必须完全一致` }
+    if (nonEmptyAfterTitle.length < atomCount) {
+      return { formula: '', atoms: [], molecularWeight: 0, containsHeavyMetal: false, precisionMode: 'standard', error: `XYZ 文件格式错误：声明 ${atomCount} 个原子但实际只有 ${nonEmptyAfterTitle.length} 行原子数据` }
     }
 
     let validCount = 0
@@ -221,185 +202,35 @@ function parseMoleculeFile(content: string, fileName: string): MoleculeParseResu
   }
 }
 
-function simulateCalculation(task: CalculationTask): CalculationResult {
-  const seed = parseInt(task.id, 36) % 1000
-  const energy = -(500 + seed * 0.5 + Math.random() * 200)
-  const dipoleMoment = Math.round((0.5 + Math.random() * 8) * 100) / 100
-  const homoEnergy = -(4 + Math.random() * 4)
-  const lumoEnergy = -(0.5 + Math.random() * 3.5)
-  const homoLumoGap = Math.round((lumoEnergy - homoEnergy) * 100) / 100
-  const toxicityScore = Math.round(Math.random() * 100) / 100
+const badContent = `这是乱写的内容
+根本不是有效的xyz格式
+随便写几行
+看看能不能校验失败`
 
-  const classifications: string[] = []
-  if (homoLumoGap < 2) classifications.push('半导体候选')
-  if (toxicityScore > 0.7) classifications.push('高风险')
+const goodContent = `3
+Water molecule
+O  0.0000  0.0000  0.0000
+H  0.7580  0.5870  0.0000
+H -0.7580  0.5870  0.0000
+`
 
-  return {
-    energy: Math.round(energy * 100) / 100,
-    dipoleMoment,
-    homoEnergy: Math.round(homoEnergy * 100) / 100,
-    lumoEnergy: Math.round(lumoEnergy * 100) / 100,
-    homoLumoGap,
-    toxicityScore,
-    classifications,
-  }
-}
+console.log('=== 测试乱写的 xyz 文件:')
+const badResult = parseMoleculeFile(badContent, 'test.xyz')
+console.log(JSON.stringify(badResult, null, 2))
 
-interface AppStore {
-  tasks: CalculationTask[]
-  notifications: Notification[]
-  addTask: (content: string, fileName: string) => CalculationTask | null
-  updateProgress: (taskId: string, progress: Partial<CalculationTask['progress']>) => void
-  completeTask: (taskId: string) => void
-  failTask: (taskId: string) => void
-  deleteTask: (taskId: string) => void
-  deleteTasks: (taskIds: string[]) => void
-  addNotification: (notification: Omit<Notification, 'id' | 'read' | 'createdAt'>) => void
-  markNotificationRead: (id: string) => void
-  markAllNotificationsRead: () => void
-  clearNotifications: () => void
-  loadDemoTasks: () => void
-}
+console.log('\n=== 测试正常的 xyz 文件:')
+const goodResult = parseMoleculeFile(goodContent, 'water.xyz')
+console.log(JSON.stringify(goodResult, null, 2))
 
-export const useStore = create<AppStore>()(
-  persist(
-    (set, get) => ({
-      tasks: [],
-      notifications: [],
+console.log('\n=== 测试空文件:')
+const emptyResult = parseMoleculeFile('', 'empty.xyz')
+console.log(JSON.stringify(emptyResult, null, 2))
 
-      addTask: (content: string, fileName: string) => {
-        const parseResult = parseMoleculeFile(content, fileName)
-        if (parseResult.error) return null
-        const hasMetal = parseResult.atoms.some(a => a.isHeavyMetal)
-        const hasC = parseResult.atoms.some(a => a.symbol === 'C')
-        const hasNonMetalOnly = !hasMetal
-        let moleculeType: CalculationTask['moleculeType'] = 'inorganic'
-        if (hasMetal) moleculeType = 'metalContaining'
-        else if (hasC) moleculeType = 'organic'
-
-        const task: CalculationTask = {
-          id: generateId(),
-          fileName,
-          formula: parseResult.formula,
-          atoms: parseResult.atoms,
-          molecularWeight: parseResult.molecularWeight,
-          precisionMode: parseResult.precisionMode,
-          status: 'pending',
-          progress: { energy: 0, dipole: 0, homoLumo: 0 },
-          submittedAt: new Date().toISOString(),
-          moleculeType,
-          fileContent: content,
-        }
-
-        set(state => ({ tasks: [task, ...state.tasks] }))
-        return task
-      },
-
-      updateProgress: (taskId, progress) => {
-        set(state => ({
-          tasks: state.tasks.map(t =>
-            t.id === taskId
-              ? { ...t, status: 'computing', progress: { ...t.progress, ...progress } }
-              : t
-          ),
-        }))
-      },
-
-      completeTask: (taskId) => {
-        const task = get().tasks.find(t => t.id === taskId)
-        if (!task) return
-        const result = simulateCalculation(task)
-        const completedAt = new Date().toISOString()
-        const submittedTime = new Date(task.submittedAt).getTime()
-        const duration = Math.round((new Date(completedAt).getTime() - submittedTime) / 1000)
-
-        set(state => ({
-          tasks: state.tasks.map(t =>
-            t.id === taskId
-              ? { ...t, status: 'completed' as const, result, completedAt, duration, progress: { energy: 100, dipole: 100, homoLumo: 100 } }
-              : t
-          ),
-        }))
-
-        get().addNotification({
-          taskId,
-          message: `${task.fileName} 计算完成`,
-          type: 'success',
-        })
-      },
-
-      failTask: (taskId) => {
-        const task = get().tasks.find(t => t.id === taskId)
-        if (!task) return
-        set(state => ({
-          tasks: state.tasks.map(t =>
-            t.id === taskId ? { ...t, status: 'failed' as const } : t
-          ),
-        }))
-        get().addNotification({
-          taskId,
-          message: `${task.fileName} 计算失败`,
-          type: 'error',
-        })
-      },
-
-      deleteTask: (taskId) => {
-        set(state => ({
-          tasks: state.tasks.filter(t => t.id !== taskId),
-          notifications: state.notifications.filter(n => n.taskId !== taskId),
-        }))
-      },
-
-      deleteTasks: (taskIds) => {
-        const idSet = new Set(taskIds)
-        set(state => ({
-          tasks: state.tasks.filter(t => !idSet.has(t.id)),
-          notifications: state.notifications.filter(n => !idSet.has(n.taskId)),
-        }))
-      },
-
-      addNotification: (notification) => {
-        const newNotif: Notification = {
-          ...notification,
-          id: generateId(),
-          read: false,
-          createdAt: new Date().toISOString(),
-        }
-        set(state => ({ notifications: [newNotif, ...state.notifications] }))
-
-        if ('Notification' in window && Notification.permission === 'granted') {
-          new Notification(newNotif.message)
-        }
-      },
-
-      markNotificationRead: (id) => {
-        set(state => ({
-          notifications: state.notifications.map(n =>
-            n.id === id ? { ...n, read: true } : n
-          ),
-        }))
-      },
-
-      markAllNotificationsRead: () => {
-        set(state => ({
-          notifications: state.notifications.map(n => ({ ...n, read: true })),
-        }))
-      },
-
-      clearNotifications: () => {
-        set({ notifications: [] })
-      },
-
-      loadDemoTasks: () => {
-        set(state => ({
-          tasks: [...demoTasks, ...state.tasks],
-        }))
-      },
-    }),
-    {
-      name: 'molcalc-storage',
-    }
-  )
-)
-
-export { parseMoleculeFile }
+console.log('\n=== 测试原子数不匹配的 xyz:')
+const badCount = `10
+Only 3 atoms
+O 0 0 0
+H 1 0 0
+H 0 1 0`
+const badCountResult = parseMoleculeFile(badCount, 'badcount.xyz')
+console.log(JSON.stringify(badCountResult, null, 2))

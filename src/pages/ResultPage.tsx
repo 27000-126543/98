@@ -1,10 +1,10 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { Canvas } from '@react-three/fiber'
 import { OrbitControls } from '@react-three/drei'
 import * as THREE from 'three'
-import { Download, FileSpreadsheet, Image, Cpu, Zap, ArrowLeftRight, Layers, Shield, AlertTriangle, ArrowLeft } from 'lucide-react'
-import * as XLSX from 'xlsx'
+import { FileSpreadsheet, Image, Cpu, Zap, ArrowLeftRight, Layers, Shield, AlertTriangle, ArrowLeft, CheckCircle2, Loader2 } from 'lucide-react'
+import ExcelJS from 'exceljs'
 import html2canvas from 'html2canvas'
 import { useStore } from '@/store'
 
@@ -41,9 +41,10 @@ function MoleculeModel({ atoms }: { atoms: { symbol: string; count: number }[] }
   const positions: { pos: [number, number, number]; color: string; radius: number }[] = []
   let idx = 0
   const goldenAngle = Math.PI * (3 - Math.sqrt(5))
+  const totalAtoms = atoms.reduce((s, a) => s + a.count, 0)
   for (const atom of atoms) {
     for (let i = 0; i < atom.count; i++) {
-      const y = 1 - (2 * idx) / Math.max(1, atoms.reduce((s, a) => s + a.count, 0) - 1)
+      const y = 1 - (2 * idx) / Math.max(1, totalAtoms - 1)
       const radiusAtY = Math.sqrt(1 - y * y)
       const theta = goldenAngle * idx
       const r = 2.5
@@ -93,6 +94,9 @@ export default function ResultPage() {
   const task = useStore(s => s.tasks.find(t => t.id === id))
   const result = task?.result
   const resultRef = useRef<HTMLDivElement>(null)
+  const moleculeRef = useRef<HTMLDivElement>(null)
+  const [exporting, setExporting] = useState(false)
+  const [exportingImg, setExportingImg] = useState(false)
 
   if (!task || !result) {
     return (
@@ -109,34 +113,169 @@ export default function ResultPage() {
     )
   }
 
-  const handleExportExcel = () => {
-    const wsData = [
-      ['属性', '值', '单位'],
-      ['文件名', task.fileName, ''],
-      ['分子式', task.formula, ''],
-      ['分子量', String(task.molecularWeight), 'g/mol'],
-      ['精度模式', task.precisionMode === 'high' ? '高精度' : '标准', ''],
-      ['能量', String(result.energy), 'Hartree'],
-      ['偶极矩', String(result.dipoleMoment), 'Debye'],
-      ['HOMO能级', String(result.homoEnergy), 'eV'],
-      ['LUMO能级', String(result.lumoEnergy), 'eV'],
-      ['HOMO-LUMO Gap', String(result.homoLumoGap), 'eV'],
-      ['毒性预测', String(result.toxicityScore), ''],
-      ['分类标签', result.classifications.join(', '), ''],
-    ]
-    const wb = XLSX.utils.book_new()
-    const ws = XLSX.utils.aoa_to_sheet(wsData)
-    XLSX.utils.book_append_sheet(wb, ws, '计算结果')
-    XLSX.writeFile(wb, `${task.fileName}_result.xlsx`)
+  const handleExportExcel = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const workbook = new ExcelJS.Workbook()
+      workbook.creator = 'MolCalc 分子性质计算平台'
+      workbook.created = new Date()
+
+      let structureImageData: string | null = null
+
+      if (moleculeRef.current) {
+        try {
+          const canvas = await html2canvas(moleculeRef.current, {
+            backgroundColor: '#050d1a',
+            scale: 2,
+            useCORS: true,
+          })
+          structureImageData = canvas.toDataURL('image/png')
+        } catch (e) {
+          console.warn('分子结构图截图失败:', e)
+        }
+      }
+
+      // ========== Sheet 1: 计算结果 ==========
+      const worksheet1 = workbook.addWorksheet('计算结果', {
+        views: [{ state: 'frozen', ySplit: 1 }],
+      })
+
+      const header1 = worksheet1.getRow(1)
+      worksheet1.mergeCells('A1:C1')
+      header1.font = { bold: true, size: 16, color: { argb: 'FF00F0FF' } }
+      header1.alignment = { horizontal: 'center', vertical: 'middle' }
+      header1.height = 24
+      worksheet1.getCell('A1').value = '分子性质计算结果'
+
+      worksheet1.mergeCells('A2:C2')
+      worksheet1.getRow(2).height = 8
+
+      const addTitleRow = (ws: ExcelJS.Worksheet, rowIdx: number, title: string, cols: number) => {
+        const range = `A${rowIdx}:${String.fromCharCode(64 + cols)}${rowIdx}`
+        ws.mergeCells(range)
+        const cell = ws.getCell(`A${rowIdx}`)
+        cell.value = title
+        cell.font = { bold: true, size: 12, color: { argb: 'FF8B5CF6' } }
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: '158B5CF6' } }
+      }
+
+      let nextRow = 3
+      addTitleRow(worksheet1, nextRow, '基本信息', 3)
+      nextRow++
+
+      const infoData = [
+        ['文件名', task.fileName, ''],
+        ['分子式', task.formula, ''],
+        ['分子量', task.molecularWeight, 'g/mol'],
+        ['精度模式', task.precisionMode === 'high' ? '高精度模式' : '标准精度模式', ''],
+        ['分子类型', task.moleculeType === 'organic' ? '有机物' : task.moleculeType === 'metalContaining' ? '含金属' : '无机物', ''],
+        ['提交时间', new Date(task.submittedAt).toLocaleString('zh-CN'), ''],
+        ['计算耗时', task.duration ? `${task.duration} 秒` : '-', ''],
+      ]
+      infoData.forEach(([k, v, u]) => {
+        worksheet1.addRow([k, v, u])
+      })
+
+      worksheet1.addRow([])
+      nextRow = worksheet1.lastRow!.number + 1
+      addTitleRow(worksheet1, nextRow, '计算结果', 3)
+      worksheet1.addRow(['属性', '数值', '单位'])
+      worksheet1.getRow(worksheet1.lastRow!.number).font = { bold: true }
+
+      const propData = [
+        ['能量', Number(result.energy.toFixed(4)), 'Hartree'],
+        ['偶极矩', Number(result.dipoleMoment.toFixed(4)), 'Debye'],
+        ['HOMO能级', Number(result.homoEnergy.toFixed(4)), 'eV'],
+        ['LUMO能级', Number(result.lumoEnergy.toFixed(4)), 'eV'],
+        ['HOMO-LUMO Gap', Number(result.homoLumoGap.toFixed(4)), 'eV'],
+        ['毒性预测', (result.toxicityScore * 100).toFixed(1) + '%', ''],
+      ]
+      propData.forEach(row => worksheet1.addRow(row))
+
+      worksheet1.addRow([])
+      nextRow = worksheet1.lastRow!.number + 1
+      addTitleRow(worksheet1, nextRow, '分类标签', 3)
+      worksheet1.addRow([result.classifications.length > 0 ? result.classifications.join('、') : '无'])
+
+      worksheet1.columns = [
+        { width: 22 }, { width: 28 }, { width: 14 },
+      ]
+
+      // ========== Sheet 2: 分子结构 ==========
+      const worksheet2 = workbook.addWorksheet('分子结构')
+      worksheet2.mergeCells('A1:E1')
+      worksheet2.getCell('A1').value = '分子结构信息'
+      worksheet2.getCell('A1').font = { bold: true, size: 16, color: { argb: 'FF00F0FF' } }
+      worksheet2.getCell('A1').alignment = { horizontal: 'center', vertical: 'middle' }
+      worksheet2.getRow(1).height = 24
+
+      worksheet2.mergeCells('A2:E2')
+      worksheet2.getRow(2).height = 8
+
+      const atomStartRow = 3
+      addTitleRow(worksheet2, atomStartRow, '原子组成详情', 5)
+      worksheet2.addRow(['序号', '元素符号', '元素名称', '数量', '总质量(g/mol)'])
+      worksheet2.getRow(worksheet2.lastRow!.number).font = { bold: true }
+
+      task.atoms.forEach((atom, idx) => {
+        worksheet2.addRow([idx + 1, atom.symbol, atom.name, atom.count, Number(atom.mass.toFixed(4))])
+      })
+
+      worksheet2.columns = [
+        { width: 8 }, { width: 12 }, { width: 14 }, { width: 10 }, { width: 18 },
+      ]
+
+      // 如果有结构图，放在 Sheet 2 表格下方
+      if (structureImageData) {
+        try {
+          const base64Data = structureImageData.indexOf(',') > 0
+            ? structureImageData.split(',')[1]
+            : structureImageData
+          const imageId = workbook.addImage({
+            base64: base64Data,
+            extension: 'png',
+          })
+          worksheet2.addRow([])
+          const imageTitleRow = worksheet2.lastRow!.number + 1
+          addTitleRow(worksheet2, imageTitleRow, '分子三维结构图', 5)
+          worksheet2.addRow([])
+          const imageAnchorRow = worksheet2.lastRow!.number + 1
+          worksheet2.addImage(imageId, {
+            tl: { col: 0, row: imageAnchorRow - 1 },
+            ext: { width: 520, height: 380 },
+          })
+          worksheet2.getRow(imageAnchorRow).height = 285
+        } catch (e) {
+          console.warn('嵌入结构图失败:', e)
+        }
+      }
+
+      const buffer = await workbook.xlsx.writeBuffer()
+      const blob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.download = `${task.fileName}_result.xlsx`
+      link.href = url
+      link.click()
+      URL.revokeObjectURL(url)
+    } finally {
+      setExporting(false)
+    }
   }
 
   const handleExportImage = async () => {
-    if (!resultRef.current) return
-    const canvas = await html2canvas(resultRef.current, { backgroundColor: '#0A1628', scale: 2 })
-    const link = document.createElement('a')
-    link.download = `${task.fileName}_result.png`
-    link.href = canvas.toDataURL('image/png')
-    link.click()
+    if (!resultRef.current || exportingImg) return
+    setExportingImg(true)
+    try {
+      const canvas = await html2canvas(resultRef.current, { backgroundColor: '#0A1628', scale: 2 })
+      const link = document.createElement('a')
+      link.download = `${task.fileName}_result.png`
+      link.href = canvas.toDataURL('image/png')
+      link.click()
+    } finally {
+      setExportingImg(false)
+    }
   }
 
   return (
@@ -152,34 +291,58 @@ export default function ResultPage() {
               <span>{task.formula}</span>
               <span className="text-gray-600">|</span>
               <span>MW: {task.molecularWeight} g/mol</span>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${task.precisionMode === 'high' ? 'bg-amber-500/20 text-amber-400' : 'bg-cyan-500/20 text-cyan-400'}`}>
+              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${task.precisionMode === 'high' ? 'bg-amber-500/20 text-amber-400' : 'bg-cyan-500/20 text-cyan-400' }`}>
                 {task.precisionMode === 'high' ? '高精度' : '标准'}
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/15 text-emerald-400">
+                <CheckCircle2 className="w-3 h-3" /> 计算完成
               </span>
             </div>
           </div>
           <div className="flex gap-3">
-            <button onClick={handleExportExcel} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-white text-sm font-medium hover:opacity-90 transition-opacity">
-              <FileSpreadsheet className="w-4 h-4" /> 导出Excel
+            <button
+              onClick={handleExportExcel}
+              disabled={exporting}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-500 to-cyan-500 text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {exporting
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> 导出中...</>
+                : <><FileSpreadsheet className="w-4 h-4" /> 导出Excel</>
+              }
             </button>
-            <button onClick={handleExportImage} className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#8B5CF6] to-[#EC4899] text-white text-sm font-medium hover:opacity-90 transition-opacity">
-              <Image className="w-4 h-4" /> 导出图片
+            <button
+              onClick={handleExportImage}
+              disabled={exportingImg}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-[#8B5CF6] to-[#EC4899] text-white text-sm font-medium hover:opacity-90 transition-opacity disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {exportingImg
+                ? <><Loader2 className="w-4 h-4 animate-spin" /> 导出中...</>
+                : <><Image className="w-4 h-4" /> 导出图片</>
+              }
             </button>
           </div>
         </div>
 
         <div ref={resultRef} className="space-y-8">
-          <div className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl overflow-hidden">
+          <div ref={moleculeRef} className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl overflow-hidden">
             <div className="p-4 border-b border-white/10">
               <h2 className="text-white font-semibold flex items-center gap-2">
                 <Cpu className="w-4 h-4 text-[#00F0FF]" /> 分子三维结构
               </h2>
             </div>
             <div className="h-[400px] bg-[#050d1a]">
-              <Canvas camera={{ position: [0, 0, 6], fov: 50 }}>
+              <Canvas
+                camera={{ position: [0, 0, 6], fov: 50 }}
+                gl={{ preserveDrawingBuffer: true, antialias: true }}
+              >
                 <ambientLight intensity={0.4} />
                 <pointLight position={[10, 10, 10]} intensity={1} />
                 <pointLight position={[-10, -10, -5]} intensity={0.3} color="#8B5CF6" />
-                <MoleculeModel atoms={task.atoms.map(a => ({ symbol: a.symbol, count: a.count }))} />
+                <MoleculeModel
+                  atoms={task.atoms.map(a => {
+                    return { symbol: a.symbol, count: a.count }
+                  })}
+                />
                 <OrbitControls autoRotate autoRotateSpeed={1.5} enableDamping dampingFactor={0.05} />
               </Canvas>
             </div>
